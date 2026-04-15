@@ -13,7 +13,7 @@ client.switch_database("ruuvi")
 def fetch_latest_temperature():
     query = """
         SELECT LAST("temperature")
-        FROM "ruuvi"
+        FROM "ruuvi_measurements"
     """
     result = client.query(query)
     points = list(result.get_points())
