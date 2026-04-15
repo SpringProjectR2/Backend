@@ -8,7 +8,7 @@ client.switch_database("ruuvi")
 
 # Map friendly names → MAC addresses
 SENSORS = {
-    "ruuvitag": "C6:06:A8:B3:7E:CC"
+    "ruuvitag": "C606A8B37ECC"
 }
 
 @app.route("/history/<sensor>")
