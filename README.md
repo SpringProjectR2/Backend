@@ -15,5 +15,5 @@ pip install flask flask_socketio
 
 Run app
 ```bash
-python main.py
+python serverauth.py
 ```
