@@ -4,8 +4,8 @@ import time
 
 BASE_URL = "http://10.137.17.253:5000"
 
-USERNAME = "testuser"
-PASSWORD = "testpass123"
+USERNAME = "testuser2"
+PASSWORD = "testpass456"
 
 
 # ---------------------------
