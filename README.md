@@ -10,7 +10,7 @@ python3 -m venv .venv
 
 Install dependencies
 ```bash
-pip install flask flask_socketio
+pip install flask flask_socketio influxdb
 ```
 
 Run app
