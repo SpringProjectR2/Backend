@@ -2,11 +2,12 @@ import random
 import threading
 from datetime import datetime, timezone, timedelta
 
-from flask import Flask, request
+from flask import Flask
 from flask_socketio import SocketIO, join_room
 
 from models import db
 from auth import auth_bp
+
 from flask_jwt_extended import (
     JWTManager,
     jwt_required,
@@ -16,13 +17,12 @@ from flask_jwt_extended import (
 
 app = Flask(__name__)
 
-# 🔐 CONFIG
-app.config['SECRET_KEY'] = 'secret!'
+app.config["SECRET_KEY"] = "secret!"
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
 app.config["JWT_SECRET_KEY"] = "super-secret-key"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
 
-socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 db.init_app(app)
 jwt = JWTManager(app)
@@ -60,21 +60,30 @@ def temperature_sensor_stream():
 def handle_connect(auth):
     global background_task_started
 
+    print("🔌 SOCKET CONNECT AUTH RAW:", auth)
+
     if not auth or "token" not in auth:
-        print("❌ No token → disconnect")
+        print("❌ Missing token → reject")
         return False
 
     token = auth["token"]
 
+    print("🔑 TOKEN RECEIVED:", token)
+
+    if not isinstance(token, str) or token.count(".") != 2:
+        print("❌ Token is not valid JWT format")
+        return False
+
     try:
         decoded = decode_token(token)
         user_id = decoded["sub"]
-        print(f"✅ User {user_id} connected")
+
+        print(f"✅ AUTH SUCCESS user_id={user_id}")
 
         join_room("authenticated")
 
     except Exception as e:
-        print(f"❌ Invalid token → disconnect ({e})")
+        print(f"❌ JWT DECODE FAILED: {e}")
         return False
 
     with background_task_lock:
@@ -85,8 +94,8 @@ def handle_connect(auth):
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    print("Client disconnected")
+    print("❌ Client disconnected")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)
