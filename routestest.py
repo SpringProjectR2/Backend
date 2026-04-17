@@ -37,7 +37,7 @@ def main():
     # pick first mac
     mac = macs[0]
 
-    history = get_history(mac, hours=24, limit=5)
+    history = get_history(mac, hours=24, limit=10)
 
     print(f"\nLast {len(history)} readings for {mac}:\n")
     for h in history:
