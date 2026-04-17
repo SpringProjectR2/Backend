@@ -6,32 +6,49 @@ from models import db, User
 
 auth_bp = Blueprint("auth", __name__)
 
+
 @auth_bp.route("/register", methods=["POST"])
 def register():
-    data = request.json
+    data = request.json or {}
 
-    if User.query.filter_by(username=data["username"]).first():
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return {"error": "username and password required"}, 400
+
+    if len(password) < 6:
+        return {"error": "password too short (min 6 chars)"}, 400
+
+    if User.query.filter_by(username=username).first():
         return {"error": "user exists"}, 400
 
     user = User(
-        username=data["username"],
-        password_hash=generate_password_hash(data["password"])
+        username=username,
+        password_hash=generate_password_hash(password)
     )
 
     db.session.add(user)
     db.session.commit()
 
-    return {"msg": "user created"}
+    return {"msg": "user created"}, 201
+
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
-    data = request.json
+    data = request.json or {}
 
-    user = User.query.filter_by(username=data["username"]).first()
+    username = data.get("username")
+    password = data.get("password")
 
-    if not user or not check_password_hash(user.password_hash, data["password"]):
+    if not username or not password:
+        return {"error": "username and password required"}, 400
+
+    user = User.query.filter_by(username=username).first()
+
+    if not user or not check_password_hash(user.password_hash, password):
         return {"error": "wrong credentials"}, 401
 
     token = create_access_token(identity=str(user.id))
 
-    return {"access_token": token}
+    return {"access_token": token}, 200
