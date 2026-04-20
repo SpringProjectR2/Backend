@@ -141,7 +141,7 @@ def get_history(mac):
     limit = request.args.get("limit", default=100, type=int)
 
     query = f"""
-        SELECT "temperature", "humidity", "batteryvoltage"
+        SELECT "temperature", "humidity", "batteryVoltage"
         FROM "ruuvi_measurements"
         WHERE time > now() - {hours}h
         AND "mac" = '{mac}'
@@ -222,9 +222,11 @@ def monitor_loop():
 
                 # STREAM temp, humidity, battery status
                 query = f"""
-                    SELECT LAST("temperature")SELECT LAST("temperature"), LAST("humidity"), LAST("batteryvoltage")
+                    SELECT *
                     FROM "ruuvi_measurements"
                     WHERE "mac" = '{mac}'
+                    ORDER BY time DESC
+                    LIMIT 1
                 """
 
                 result = client.query(query)
@@ -232,9 +234,9 @@ def monitor_loop():
 
                 if points:
                     p = points[0]
-                    temp = p.get("last")
-                    humidity = p.get("last_1")
-                    battery = p.get("last_2")
+                    temp = p.get("temperature")
+                    humidity = p.get("humidity")
+                    battery = p.get("batteryVoltage")
 
                     current = {
                         "temperature": temp,
