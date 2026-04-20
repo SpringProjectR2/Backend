@@ -160,7 +160,7 @@ def get_history(mac):
             "time": p.get("time"),
             "temperature": p.get("temperature"),
             "humidity": p.get("humidity"),
-            "battery": p.get("batteryvoltage")
+            "battery": p.get("batteryVoltage")
         })
 
 
