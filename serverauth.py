@@ -130,7 +130,8 @@ def query_active_macs(hours=48):
 @jwt_required()
 def get_macs():
     hours = request.args.get("hours", default=48, type=int)
-    return jsonify(list(query_active_macs(hours)))
+    macs = query_active_macs(hours)
+    return jsonify(sorted(list(macs)))
 
 
 @app.route("/history/<mac>")
@@ -140,22 +141,30 @@ def get_history(mac):
     limit = request.args.get("limit", default=100, type=int)
 
     query = f"""
-        SELECT "temperature"
+        SELECT "temperature", "humidity", "batteryvoltage"
         FROM "ruuvi_measurements"
         WHERE time > now() - {hours}h
         AND "mac" = '{mac}'
         AND "dataFormat" = '5'
-        ORDER BY time DESC
+        ORDER BY time ASC
         LIMIT {limit}
     """
 
     result = client.query(query)
     points = list(result.get_points())
 
-    return jsonify([
-        {"time": p["time"], "temperature": p.get("temperature")}
-        for p in points
-    ])
+    data = []
+
+    for p in points:
+        data.append({
+            "time": p.get("time"),
+            "temperature": p.get("temperature"),
+            "humidity": p.get("humidity"),
+            "battery": p.get("batteryvoltage")
+        })
+
+
+    return jsonify(data)
 
 
 # ---------------------------
@@ -211,9 +220,9 @@ def monitor_loop():
 
             for mac in macs:
 
-                # STREAM
+                # STREAM temp, humidity, battery status
                 query = f"""
-                    SELECT LAST("temperature")
+                    SELECT LAST("temperature")SELECT LAST("temperature"), LAST("humidity"), LAST("batteryvoltage")
                     FROM "ruuvi_measurements"
                     WHERE "mac" = '{mac}'
                 """
@@ -222,16 +231,27 @@ def monitor_loop():
                 points = list(result.get_points())
 
                 if points:
-                    temp = points[0]["last"]
+                    p = points[0]
+                    temp = p.get("last")
+                    humidity = p.get("last_1")
+                    battery = p.get("last_2")
 
-                    if last_values.get(mac) != temp:
-                        socketio.emit("temperature_update", {
+                    current = {
+                        "temperature": temp,
+                        "humidity": humidity,
+                        "battery": battery
+                    }
+
+                    if last_values.get(mac) != current:
+                        socketio.emit("sensor_update", {
                             "mac": mac,
                             "temperature": temp,
-                            "time": points[0]["time"]
+                            "humidity": humidity,
+                            "battery": battery,
+                            "time": p["time"]
                         }, room="authenticated")
 
-                        last_values[mac] = temp
+                        last_values[mac] = current
 
                 # ALARM
                 alarm = check_mac(mac)
