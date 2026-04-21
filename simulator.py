@@ -27,8 +27,8 @@ def parse_args():
                         ],
                         help="List of simulated MAC addresses")
 
-    parser.add_argument("--alarm-mac", default=None,
-                        help="MAC that will intentionally exceed alarm threshold")
+    parser.add_argument("--low-battery-mac", default=None,
+                        help="MAC that will simulate draining battery")
 
     return parser.parse_args()
 
@@ -41,30 +41,63 @@ def init_state(macs):
     return {
         mac: {
             "temp": random.uniform(18, 19),
-            "trend": random.choice([-0.08, 0.08])
+            "temp_trend": random.choice([-0.08, 0.08]),
+
+            "humidity": random.uniform(40, 60),
+            "hum_trend": random.choice([-0.2, 0.2]),
+
+            "battery": random.uniform(2.7, 3.0)
         }
         for mac in macs
     }
 
 
-def next_temp(mac, state, forced_alarm_mac=None):
-    # Force alarm behavior if specified
-    if forced_alarm_mac and mac == forced_alarm_mac:
-        return round(random.uniform(21.0, 25.0), 2)
+# ---------------------------
+# SIMULATION HELPERS
+# ---------------------------
 
+def next_temp(mac, state):
     s = state[mac]
 
-    # Smooth drift
-    s["temp"] += s["trend"] + random.uniform(-0.05, 0.05)
+    s["temp"] += s["temp_trend"] + random.uniform(-0.05, 0.05)
 
-    # Occasionally flip direction
     if random.random() < 0.1:
-        s["trend"] *= -1
+        s["temp_trend"] *= -1
 
-    # Clamp realistic range
     s["temp"] = max(15.0, min(30.0, s["temp"]))
 
     return round(s["temp"], 2)
+
+
+def next_humidity(mac, state):
+    s = state[mac]
+
+    s["humidity"] += s["hum_trend"] + random.uniform(-0.5, 0.5)
+
+    if random.random() < 0.1:
+        s["hum_trend"] *= -1
+
+    s["humidity"] = max(20.0, min(90.0, s["humidity"]))
+
+    return round(s["humidity"], 2)
+
+
+def next_battery(mac, state, low_battery_mac=None):
+    s = state[mac]
+
+    # Simulate draining battery for selected MAC
+    if low_battery_mac and mac == low_battery_mac:
+        # gradual drain
+        s["battery"] -= random.uniform(0.01, 0.03)
+
+    else:
+        # stable battery with tiny noise
+        s["battery"] += random.uniform(-0.005, 0.005)
+
+    # clamp realistic range
+    s["battery"] = max(1.0, min(3.2, s["battery"]))
+
+    return round(s["battery"], 3)
 
 
 # ---------------------------
@@ -84,8 +117,8 @@ def run():
     print(f"MACs: {', '.join(args.macs)}")
     print(f"Interval: {args.interval}s")
 
-    if args.alarm_mac:
-        print(f"Alarm forced on: {args.alarm_mac}")
+    if args.low_battery_mac:
+        print(f"Battery drain enabled for: {args.low_battery_mac}")
 
     print("-" * 40)
 
@@ -93,7 +126,9 @@ def run():
         points = []
 
         for mac in args.macs:
-            temp = next_temp(mac, state, args.alarm_mac)
+            temp = next_temp(mac, state)
+            humidity = next_humidity(mac, state)
+            battery = next_battery(mac, state, args.low_battery_mac)
 
             point = {
                 "measurement": "ruuvi_measurements",
@@ -102,12 +137,20 @@ def run():
                     "dataFormat": "5"
                 },
                 "fields": {
-                    "temperature": temp
+                    "temperature": temp,
+                    "humidity": humidity,
+                    "batteryVoltage": battery
                 }
             }
 
             points.append(point)
-            print(f"{mac} -> {temp:.2f} °C")
+
+            print(
+                f"{mac} -> "
+                f"{temp:.2f} °C | "
+                f"{humidity:.2f} % | "
+                f"{battery:.3f} V"
+            )
 
         try:
             client.write_points(points)
