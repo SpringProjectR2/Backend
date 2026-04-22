@@ -1,5 +1,5 @@
 # Backend
-
+# assumes PI has ruuvicollector and influxdb installed and configured, TODO: installer to fix these
 ## Getting started
 
 Create virtual environment
