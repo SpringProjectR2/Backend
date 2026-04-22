@@ -15,5 +15,5 @@ pip install -r requirements.txt
 
 Run app
 ```bash
-python serverauth.py
+python server_usrcfgalarms.py
 ```
