@@ -3,7 +3,7 @@ from flask_socketio import SocketIO, join_room
 from influxdb import InfluxDBClient
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
@@ -219,18 +219,42 @@ def query_active_macs(hours=48):
 def get_macs():
     return jsonify(query_active_macs())
 
-
 @app.route("/history/<mac>", methods=["GET"])
 @jwt_required()
 def get_history(mac):
 
-    hours = request.args.get("hours", default=24, type=int)
-    limit = request.args.get("limit", default=100, type=int)
+    start = request.args.get("start")  # ISO string
+    end = request.args.get("end")      # ISO string
+    limit = request.args.get("limit", default=1000000, type=int)
 
+    # ---------------------------
+    # BACKWARD COMPATIBILITY
+    # ---------------------------
+    if not start:
+        hours = request.args.get("hours", type=int)
+
+        if hours:
+            start = (
+                datetime.now(timezone.utc) - timedelta(hours=hours)
+            ).isoformat()
+        else:
+            return {"error": "start or hours required"}, 400
+
+    # ---------------------------
+    # BUILD TIME FILTER
+    # ---------------------------
+    time_filter = f"time >= '{start}'"
+
+    if end:
+        time_filter += f" AND time <= '{end}'"
+
+    # ---------------------------
+    # INFLUX QUERY
+    # ---------------------------
     query = f"""
         SELECT "temperature", "humidity", "batteryVoltage"
         FROM "ruuvi_measurements"
-        WHERE time > now() - {hours}h
+        WHERE {time_filter}
         AND "mac" = '{mac}'
         AND "dataFormat" = '5'
         ORDER BY time ASC
@@ -238,18 +262,24 @@ def get_history(mac):
     """
 
     result = client.query(query)
-    points = list(result.get_points())
+    points = []
+    for (_, _), series in result.items():
+        points.extend(series)
 
+    # ---------------------------
+    # NORMALIZE TIMESTAMPS
+    # ---------------------------
     return jsonify([
-        {
-            "time": datetime.fromisoformat(p.get("time").replace("Z", "+00:00")).isoformat(),
-            "temperature": p.get("temperature"),
-            "humidity": p.get("humidity"),
-            "battery": p.get("batteryVoltage")
-        }
-        for p in points
+    {
+        "time": datetime.fromisoformat(
+            p.get("time").replace("Z", "+00:00")
+        ).isoformat(),
+        "temperature": p.get("temperature"),
+        "humidity": p.get("humidity"),
+        "battery": p.get("batteryVoltage")
+    }
+    for p in points
     ])
-
 
 # ---------------------------
 # SOCKET AUTH (NAMESPACES)
