@@ -17,3 +17,6 @@ Run app
 ```bash
 python main.py
 ```
+
+Simulator.py is for generating sensor data serverside for testing.
+test_features.py simulates a frontend and tests main features.
