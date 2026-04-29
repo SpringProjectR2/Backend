@@ -103,6 +103,9 @@ io.connect(BASE_URL, {
 })
 ###
 ###
+
+Namespaces: /sensor-data
+            /sensor-alarm
 sensor_update
 
 {
