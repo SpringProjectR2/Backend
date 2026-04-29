@@ -1,5 +1,5 @@
 # Backend
-
+# assumes PI has ruuvicollector and influxdb installed and configured, TODO: installer to fix these
 ## Getting started
 
 Create virtual environment
@@ -10,10 +10,10 @@ python3 -m venv .venv
 
 Install dependencies
 ```bash
-pip install flask flask_socketio
+pip install -r requirements.txt
 ```
 
 Run app
 ```bash
-python main.py
+python server_usrcfgalarms.py
 ```

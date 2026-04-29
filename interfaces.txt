@@ -1,0 +1,132 @@
+BACKEND CALLS
+
+###
+POST /register
+
+body:
+{
+  "username": "string",
+  "password": "string"
+}
+
+response:
+{ "msg": "created" }
+
+###
+###
+POST /login
+
+body:
+
+{
+    "username": "string",
+    "password": "string"
+}
+
+response:
+
+{
+    "access_token": "jwt_token"
+}
+###
+###
+Auth usage (all protected endpoints)
+
+include header:
+Authorization: Bearer <JWT_TOKEN>
+###
+###
+GET /alarm-config
+
+response:
+
+{
+  "battery_threshold": 1.5,
+  "battery_cooldown": 86400,
+  "temp_threshold": 25.0,
+  "temp_cooldown": 3600
+}
+###
+###
+POST /alarm-config
+
+body:
+{
+  "battery_threshold": 1.6,
+  "battery_cooldown": 30,
+  "temp_threshold": 22.0,
+  "temp_cooldown": 30
+}
+
+response:
+{ "msg": "updated" }
+###
+###
+GET /macs
+
+response:
+[
+  "AABBCCDDEE01",
+  "AABBCCDDEE02"
+]
+###
+###
+GET /history/<mac>
+
+Query params:
+hours (default 24)
+limit (default 100)
+
+example:
+/history/AABBCCDDEE01?hours=2&limit=10
+
+response:
+[
+  {
+    "time": "2026-04-21T10:00:00Z",
+    "temperature": 22.4,
+    "humidity": 45.2,
+    "battery": 2.81
+  }
+]
+###
+###
+Real-time socket
+
+connect with JWT:
+#JavaScript
+
+io.connect(BASE_URL, {
+  auth: {
+    token: "<JWT_TOKEN>"
+  }
+})
+###
+###
+
+Namespaces: /sensor-data
+            /sensor-alarm
+sensor_update
+
+{
+  "mac": "AABBCCDDEE01",
+  "temperature": 21.5,
+  "humidity": 44.2,
+  "battery": 2.80
+}
+###
+###
+battery_low
+
+{
+  "mac": "AABBCCDDEE01",
+  "battery": 1.42
+}
+###
+###
+temp_high
+
+{
+  "mac": "AABBCCDDEE01",
+  "temperature": 27.8
+}
