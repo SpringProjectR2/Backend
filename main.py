@@ -242,7 +242,7 @@ def get_history(mac):
 
     return jsonify([
         {
-            "time": p.get("time"),
+            "time": datetime.fromisoformat(p.get("time").replace("Z", "+00:00")).isoformat(),
             "temperature": p.get("temperature"),
             "humidity": p.get("humidity"),
             "battery": p.get("batteryVoltage")
