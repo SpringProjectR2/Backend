@@ -1,0 +1,379 @@
+# usage: ansible-playbook -i "127.0.0.1," iot-project.yml
+#
+# Prerequisites on control machine:
+#   pip install ansible
+#   ansible-galaxy collection install community.general
+#
+# Optional overrides (pass with -e):
+#   ansible-playbook -i "127.0.0.1," iot-project.yml -e "db_name=mydb"
+
+- hosts: 127.0.0.1
+  connection: local
+  gather_facts: yes          # Enabled: lets us detect arch (armhf vs arm64 vs x86_64) and OS
+  become: yes
+  become_user: root
+
+  # ---------------------------------------------------------------------------
+  # Variables — override via group_vars/, host_vars/, or -e on the command line
+  # ---------------------------------------------------------------------------
+  vars:
+    # --- InfluxDB ---
+    influxdb_version: "1.8.10"
+    # Architecture map: Ansible fact -> .deb suffix used by InfluxData
+    influxdb_arch_map:
+      armv7l:  "armhf"
+      aarch64: "arm64"
+      x86_64:  "amd64"
+    influxdb_arch: "{{ influxdb_arch_map[ansible_architecture] | default('amd64') }}"
+    influxdb_deb: "influxdb_{{ influxdb_version }}_{{ influxdb_arch }}.deb"
+    influxdb_url: "https://dl.influxdata.com/influxdb/releases/{{ influxdb_deb }}"
+
+    # --- Database ---
+    db_name: "ruuvi"
+
+    # --- Java ---
+    # JDK 21 is the current LTS (supported until 2029).
+    # To upgrade to JDK 25 LTS once Debian packages are widely available,
+    # change this to openjdk-25-jdk.
+    java_package: "openjdk-21-jdk"
+     
+    # --- Python ---
+    python_pip_packages:
+      - requests
+      - influxdb
+      - Flask
+      - flask-socketio
+      - python-socketio
+      - python-engineio
+      - Flask-SQLAlchemy
+      - Flask-JWT-Extended
+      - Werkzeug
+
+    # --- Project repo ---
+    project_repo_url: "https://github.com/SpringProjectR2/Backend.git"
+    project_dest: "/opt/iot-project"
+    project_version: "main"   # branch, tag, or commit SHA
+
+    # --- RuuviCollector ---
+    ruuvi_collector_repo: "https://github.com/Scrin/RuuviCollector"
+    ruuvi_collector_dest: "/opt/RuuviCollector"
+    ruuvi_collector_jar: "{{ ruuvi_collector_dest }}/target/ruuvi-collector-0.2.jar"
+    # Sensor MAC-to-name mappings — edit to match your sensors
+    ruuvi_sensor_names: |
+      # AABBCCDDEEFF=Living Room
+      # 112233445566=Kitchen
+      # Add more sensors here: MAC=Name
+      C606A8B37ECC=Sensor1
+
+    # --- Service ---
+    ruuvi_service_user: "ruuvi"   # Dedicated service user (not root)
+    ruuvi_service_working_dir: "{{ ruuvi_collector_dest }}/target"
+
+  # ---------------------------------------------------------------------------
+  # Tasks
+  # ---------------------------------------------------------------------------
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # SECTION 1: System packages
+    # -------------------------------------------------------------------------
+    - name: "[packages] Update apt cache and install system dependencies"
+      apt:
+        name:
+          - maven
+          - "{{ java_package }}"
+          - bluetooth
+          - bluez
+          - bluez-hcidump
+          - python3-pip
+          - git
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # -------------------------------------------------------------------------
+    # SECTION 2: Bluetooth setup
+    # -------------------------------------------------------------------------
+    - name: Check Bluetooth rfkill state
+      command: rfkill list bluetooth
+      register: rfkill_bt
+      changed_when: false
+
+    - name: Fail if Bluetooth is hard blocked
+      fail:
+        msg: "Bluetooth is hard blocked (hardware switch or BIOS)."
+      when: "'Hard blocked: yes' in rfkill_bt.stdout"
+
+    - name: Unblock Bluetooth if soft blocked
+      command: rfkill unblock bluetooth
+      when: "'Soft blocked: yes' in rfkill_bt.stdout"
+
+    - name: Ensure Bluetooth service is running
+      systemd:
+        name: bluetooth
+        state: started
+        enabled: true
+
+    # -------------------------------------------------------------------------
+    # SECTION 3: Python dependencies
+    # -------------------------------------------------------------------------
+    - name: "[python] Install pip packages into a virtualenv"
+      pip:
+        name: "{{ python_pip_packages }}"
+        virtualenv: /opt/iot-venv
+        virtualenv_command: python3 -m venv
+
+    # -------------------------------------------------------------------------
+    # SECTION 4: InfluxDB
+    # -------------------------------------------------------------------------
+    - name: "[influxdb] Check if InfluxDB is already installed"
+      stat:
+        path: /usr/bin/influxd
+      register: influxd_binary
+
+    - name: "[influxdb] Download and install InfluxDB {{ influxdb_version }} ({{ influxdb_arch }})"
+      apt:
+        deb: "{{ influxdb_url }}"
+      when: not influxd_binary.stat.exists
+
+    - name: "[influxdb] Enable and start InfluxDB"
+      systemd:
+        name: influxdb
+        enabled: yes
+        state: started
+      # Fallback for systems where the systemd module misbehaves (e.g. Armbian):
+      # shell: systemctl enable influxdb.service --now
+
+    - name: "[influxdb] Verify InfluxDB is responding"
+      uri:
+        url: "http://localhost:8086/ping"
+        status_code: 204
+      register: influxdb_ping
+      retries: 5
+      delay: 5
+      until: influxdb_ping is defined and influxdb_ping.status is defined and influxdb_ping.status == 204
+
+    - name: "[influxdb] Create project database"
+      community.general.influxdb_database:
+        hostname: "127.0.0.1"
+        port: 8086
+        database_name: "{{ db_name }}"
+        state: present
+      vars:
+        ansible_python_interpreter: /opt/iot-venv/bin/python
+
+    # -------------------------------------------------------------------------
+    # SECTION 5: RuuviCollector
+    # -------------------------------------------------------------------------
+    - name: "[ruuvi] Check if service user already exists"
+      command: id {{ ruuvi_service_user }}
+      register: ruuvi_user_check
+      changed_when: false
+      failed_when: false
+
+    - name: "[ruuvi] Ensure dedicated service user exists"
+      user:
+        name: "{{ ruuvi_service_user }}"
+        system: yes
+        shell: /usr/sbin/nologin
+        home: "{{ ruuvi_collector_dest }}"
+        create_home: no
+      when: ruuvi_user_check.rc != 0
+
+    - name: "[ruuvi] Clone RuuviCollector repository"
+      git:
+        repo: "{{ ruuvi_collector_repo }}"
+        dest: "{{ ruuvi_collector_dest }}"
+        version: master
+        force: no
+
+    - name: "[ruuvi] Build RuuviCollector with Maven"
+      shell: mvn clean package -DskipTests
+      args:
+        chdir: "{{ ruuvi_collector_dest }}"
+        creates: "{{ ruuvi_collector_jar }}"   # Skips rebuild if jar already exists
+
+    - name: "[ruuvi] Set Bluetooth capabilities on hcitool and hcidump"
+      capabilities:
+        path: "{{ item }}"
+        capability: "cap_net_raw,cap_net_admin+eip"
+        state: present
+      loop:
+        - /usr/bin/hcitool
+        - /usr/bin/hcidump
+      # capabilities module is cleaner and idempotent vs raw setcap shell calls
+
+    - name: "[ruuvi] Write sensor name mappings"
+      copy:
+        dest: "{{ ruuvi_service_working_dir }}/ruuvi-names.properties"
+        content: "{{ ruuvi_sensor_names }}"
+        owner: "{{ ruuvi_service_user }}"
+        mode: "0640"
+        force: no   # Don't overwrite if user has already customised it
+
+    - name: "[ruuvi] Copy collector config from example"
+      copy:
+        src: "{{ ruuvi_collector_dest }}/ruuvi-collector.properties.example"
+        dest: "{{ ruuvi_service_working_dir }}/ruuvi-collector.properties"
+        remote_src: yes
+        force: no   # Don't overwrite if user has already customised it
+
+    - name: "[ruuvi] Install RuuviCollector systemd service"
+      copy:
+        dest: /etc/systemd/system/ruuvicollector.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=RuuviCollector Service
+          After=network.target influxdb.service
+
+          [Service]
+          Type=simple
+          User={{ ruuvi_service_user }}
+          WorkingDirectory={{ ruuvi_service_working_dir }}
+          ExecStart=/usr/bin/java -jar {{ ruuvi_collector_jar }}
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    - name: "[ruuvi] Enable and start RuuviCollector"
+      systemd:
+        name: ruuvicollector
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # SECTION 6: Your project repo
+    # -------------------------------------------------------------------------
+    - name: "[project] Clone project repository"
+      git:
+        repo: "{{ project_repo_url }}"
+        dest: "{{ project_dest }}"
+        version: "{{ project_version }}"
+        force: no
+
+    - name: "[project] Set project directory ownership"
+      file:
+        path: "{{ project_dest }}"
+        owner: "{{ ruuvi_service_user }}"
+        recurse: yes
+
+    - name: "[project] Set virtualenv ownership"
+      file:
+        path: /opt/iot-venv
+        owner: "{{ ruuvi_service_user }}"
+        recurse: yes
+
+    - name: "[project] Install project systemd service"
+      copy:
+        dest: /etc/systemd/system/iot-project.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=IoT Project Service
+          After=network.target influxdb.service ruuvicollector.service
+
+          [Service]
+          Type=simple
+          User={{ ruuvi_service_user }}
+          WorkingDirectory={{ project_dest }}
+          ExecStart=/opt/iot-venv/bin/python {{ project_dest }}/main.py
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    - name: "[project] Enable and start project service"
+      systemd:
+        name: iot-project
+        enabled: yes
+        state: started
+
+    # OPTIONAL: Simulator service for testing purposes — uncomment to enable
+    # - name: "[project] Install simulator systemd service"
+    #   copy:
+    #     dest: /etc/systemd/system/iot-simulator.service
+    #     owner: root
+    #     group: root
+    #     mode: "0644"
+    #     content: |
+    #       [Unit]
+    #       Description=IoT Simulator Service
+    #       After=network.target influxdb.service
+    #
+    #       [Service]
+    #       Type=simple
+    #       User={{ ruuvi_service_user }}
+    #       WorkingDirectory={{ project_dest }}
+    #       ExecStart=/opt/iot-venv/bin/python {{ project_dest }}/simulator.py
+    #       Restart=on-failure
+    #       RestartSec=10
+    #
+    #       [Install]
+    #       WantedBy=multi-user.target
+    #   notify: Reload systemd
+    #
+    # - name: "[project] Enable and start simulator service"
+    #   systemd:
+    #     name: iot-simulator
+    #     enabled: yes
+    #     state: started
+    #     daemon_reload: yes
+
+    # -------------------------------------------------------------------------
+    # SECTION 7: Verification
+    # -------------------------------------------------------------------------
+    - name: "[verify] Check Java version"
+      command: java -version
+      register: java_version_output
+      changed_when: false
+
+    - name: "[verify] Print Java version"
+      debug:
+        msg: "{{ java_version_output.stderr }}"
+
+    - name: "[verify] Check InfluxDB is accepting queries"
+      uri:
+        url: "http://localhost:8086/query?q=SHOW+DATABASES"
+        status_code: 200
+      register: influxdb_query
+
+    - name: "[verify] Assert project database exists"
+      assert:
+        that:
+          - influxdb_query.json.results[0].series is defined
+          - influxdb_query.json.results[0].series | length > 0
+          - db_name in (influxdb_query.json.results[0].series[0]['values'] | map('first') | list)
+        fail_msg: "Database '{{ db_name }}' was not found in InfluxDB!"
+        success_msg: "Database '{{ db_name }}' confirmed in InfluxDB."
+
+    - name: "[verify] Check RuuviCollector service is running"
+      systemd:
+        name: ruuvicollector
+      register: ruuvi_svc
+      failed_when: ruuvi_svc.status.ActiveState != "active"
+      changed_when: false
+
+    - name: "[verify] Check project service is running"
+      systemd:
+        name: iot-project
+      register: project_svc
+      failed_when: project_svc.status.ActiveState != "active"
+      changed_when: false
+
+  # ---------------------------------------------------------------------------
+  # Handlers
+  # ---------------------------------------------------------------------------
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
