@@ -1,6 +1,7 @@
 import requests
 import socketio
 import time
+from datetime import datetime, timezone, timedelta
 
 BASE_URL = "http://10.137.17.253:5000"
 
@@ -16,13 +17,13 @@ def safe_json(r):
 
 
 def print_section(title):
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print(title)
-    print("=" * 50)
+    print("=" * 60)
 
 
 # ---------------------------
-# REGISTER
+# REGISTER USER
 # ---------------------------
 print_section("REGISTER USER")
 
@@ -55,7 +56,6 @@ if not token:
     print("Login failed, exiting")
     exit()
 
-
 headers = {"Authorization": f"Bearer {token}"}
 
 
@@ -65,48 +65,75 @@ headers = {"Authorization": f"Bearer {token}"}
 print_section("GET MAC LIST")
 
 r = requests.get(f"{BASE_URL}/macs", headers=headers)
-
 macs = safe_json(r)
 
 print("Status:", r.status_code)
 print("MACs:", macs)
 
 if not isinstance(macs, list) or not macs:
-    print("No MACs available, skipping history test")
+    print("No MACs found, skipping history tests")
     selected_mac = None
 else:
     selected_mac = macs[0]
 
 
 # ---------------------------
-# GET HISTORY
+# HISTORY TEST (HOURS)
 # ---------------------------
 if selected_mac:
-    print_section(f"GET HISTORY FOR {selected_mac}")
+    print_section("HISTORY TEST (LAST 24 HOURS)")
 
     r = requests.get(
         f"{BASE_URL}/history/{selected_mac}",
         headers=headers,
-        params={"hours": 1, "limit": 10}
+        params={"hours": 4, "limit": 50}
     )
 
-    history = safe_json(r)
+    data = safe_json(r)
 
     print("Status:", r.status_code)
-    print("History sample (first 3 rows):")
-    for row in history[:3]:
+    print("Returned points:", len(data))
+
+    for row in data[:20]:
         print(row)
 
 
 # ---------------------------
-# SOCKET.IO CLIENT
+# HISTORY TEST (LAST MONTH TIMERANGE)
+# ---------------------------
+if selected_mac:
+    print_section("HISTORY TEST (LAST MONTH TIME RANGE)")
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+
+    r = requests.get(
+        f"{BASE_URL}/history/{selected_mac}",
+        headers=headers,
+        params={
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "limit": 250
+        }
+    )
+
+    data = safe_json(r)
+
+    print("Status:", r.status_code)
+    print("Returned points:", len(data))
+
+    for row in data[:20]:
+        print(row)
+
+
+# ---------------------------
+# SOCKET.IO TEST
 # ---------------------------
 print_section("SOCKET TEST")
 
 sio = socketio.Client(logger=False, engineio_logger=False)
 
 
-# ---- SENSOR DATA ----
 @sio.event(namespace="/sensor-data")
 def connect():
     print("Connected to /sensor-data")
@@ -122,7 +149,6 @@ def on_sensor(data):
     print("SENSOR UPDATE:", data)
 
 
-# ---- SENSOR ALARM ----
 @sio.event(namespace="/sensor-alarm")
 def connect_alarm():
     print("Connected to /sensor-alarm")
@@ -143,10 +169,7 @@ def on_temp(data):
     print("TEMP HIGH:", data)
 
 
-# ---------------------------
-# CONNECT
-# ---------------------------
-print("Connecting to Socket.IO namespaces")
+print("Connecting to server...")
 
 try:
     sio.connect(
@@ -159,15 +182,12 @@ except Exception as e:
     print("Connection failed:", e)
     exit()
 
-print("Listening for events")
+print("Listening for events...")
 
 
-# ---------------------------
-# LOOP
-# ---------------------------
 try:
     while True:
         time.sleep(1)
 except KeyboardInterrupt:
-    print("Shutting down client")
+    print("Stopping client")
     sio.disconnect()
