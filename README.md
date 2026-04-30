@@ -1,19 +1,28 @@
 # Backend
-# assumes PI has ruuvicollector and influxdb installed and configured, TODO: installer to fix these
+
 ## Getting started
-
-Create virtual environment
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
+```
+apt install ansible git -y
+git clone https://github.com/ilatvala/ruuvigw.git
+cd ruuvigw/
 ```
 
-Install dependencies
-```bash
-pip install -r requirements.txt
+## Configuration
+
+Before running the playbook, edit `iot-project.yml` to set your sensor MAC-to-name mappings:
+
+```yaml
+ruuvi_sensor_names: |
+  C606A8B37ECC=Sensor1
+  # Add more sensors here: MAC=Name
 ```
 
-Run app
+## Running the playbook
+
 ```bash
-python server_usrcfgalarms.py
+ansible-playbook -i "127.0.0.1," iot-project.yml --ask-become-pass
 ```
+
+### Optional: simulator mode
+
+To run `simulator.py` instead of relying on live Ruuvi sensors (e.g. for testing), uncomment the simulator service tasks at the bottom of section 6 in the playbook before running.
